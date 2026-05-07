@@ -63,7 +63,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .quote-card.copied { border-left-color: #d4a017; }
 .quote-card.editing { border-left-color: #1565c0; background: #fafbff; }
 .quote-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
-.person-name { font-weight: 600; font-size: 15px; color: #1a5632; }
+.person-name { font-weight: 600; font-size: 15px; color: #1a5632; display: flex; align-items: center; gap: 8px; }
+.headshot { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; border: 2px solid #e0e0e0; }
+.headshot-placeholder { width: 36px; height: 36px; border-radius: 50%; background: #e8f5e9; display: flex; align-items: center; justify-content: center; font-size: 14px; color: #1a5632; font-weight: 600; border: 2px solid #e0e0e0; flex-shrink: 0; }
+.upload-headshot { font-size: 10px; color: #1565c0; cursor: pointer; text-decoration: underline; margin-left: 4px; }
+.upload-headshot:hover { color: #0d47a1; }
+.landing-state { text-align: center; padding: 80px 20px; color: #888; }
+.landing-state h2 { font-size: 22px; color: #1a5632; margin-bottom: 12px; font-weight: 600; }
+.landing-state p { font-size: 15px; max-width: 500px; margin: 0 auto; line-height: 1.6; }
+.landing-stats { display: flex; justify-content: center; gap: 32px; margin-top: 24px; }
+.landing-stat { text-align: center; }
+.landing-stat strong { display: block; font-size: 28px; color: #1a5632; }
+.landing-stat span { font-size: 13px; color: #999; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
 .badge-membership { background: #e8f5e9; color: #2e7d32; }
 .badge-chapter { background: #e3f2fd; color: #1565c0; }
@@ -260,6 +271,7 @@ let canAdmin = false;
 let activeTopics = new Set();
 let searchTimeout = null;
 let editingKey = null;
+let headshots = {};
 
 // --- Password ---
 function checkPassword() {
@@ -293,12 +305,15 @@ if (stored === 'admin' || stored === 'viewer') {
 // --- Firebase ---
 async function loadData() {
   try {
-    const [qRes, cRes] = await Promise.all([
+    const [qRes, cRes, hRes] = await Promise.all([
       fetch(DB_URL + '/quotes.json'),
-      fetch(DB_URL + '/categories.json')
+      fetch(DB_URL + '/categories.json'),
+      fetch(DB_URL + '/headshots.json')
     ]);
     const qData = await qRes.json();
     const cData = await cRes.json();
+    const hData = await hRes.json();
+    if (hData) headshots = hData;
 
     if (qData && Object.keys(qData).length > 0) {
       quotes = Object.entries(qData).map(([key, val]) => ({ ...val, _key: key }));
@@ -431,13 +446,41 @@ function makeTopicCheckboxes(list, checked, prefix) {
   ).join('');
 }
 
+function hasActiveFilter() {
+  const f = getFilters();
+  return f.search || f.person || f.membership || f.chapter || f.topics.size > 0;
+}
+
+function personKey(name) { return name.replace(/[^a-zA-Z0-9]/g, '_'); }
+
+function headshotHtml(person) {
+  const key = personKey(person);
+  const src = headshots[key];
+  if (src) return '<img class="headshot" src="' + src + '" alt="" />';
+  const initials = person.split(' ').map(w => w[0]).join('').substring(0, 2).toUpperCase();
+  return '<span class="headshot-placeholder">' + initials + '</span>';
+}
+
 function renderQuotes() {
   const filters = getFilters();
   const filtered = quotes.filter(q => matchesFilters(q, filters));
   const grid = document.getElementById('quotesGrid');
+  const people = new Set(quotes.map(q => q.person));
 
-  document.getElementById('headerCount').textContent = quotes.length + ' quotes from ' + new Set(quotes.map(q => q.person)).size + ' member interviews';
+  document.getElementById('headerCount').textContent = quotes.length + ' quotes from ' + people.size + ' member interviews';
   document.getElementById('resultCount').innerHTML = 'Showing <strong>' + filtered.length + '</strong> of <strong>' + quotes.length + '</strong> quotes';
+
+  if (!hasActiveFilter()) {
+    grid.innerHTML = '<div class="landing-state">' +
+      '<h2>Welcome to ASLA MemberVoices</h2>' +
+      '<p>Use the search bar, filters, or topic chips above to find quotes from ASLA member interviews.</p>' +
+      '<div class="landing-stats">' +
+      '<div class="landing-stat"><strong>' + quotes.length + '</strong><span>Quotes</span></div>' +
+      '<div class="landing-stat"><strong>' + people.size + '</strong><span>Members</span></div>' +
+      '<div class="landing-stat"><strong>' + categories.topics.length + '</strong><span>Topics</span></div>' +
+      '</div></div>';
+    return;
+  }
 
   if (filtered.length === 0) {
     grid.innerHTML = '<div class="empty-state"><h3>No quotes match your filters</h3><p>Try adjusting your search or filters</p></div>';
@@ -449,6 +492,8 @@ function renderQuotes() {
     const isEditing = editingKey === q._key;
     const topicBadges = (q.topics || []).map(t => '<span class="badge badge-topic">' + esc(t) + '</span>').join('');
     const chapterBadge = q.chapter && q.chapter !== 'Unknown' ? '<span class="badge badge-chapter">' + esc(q.chapter) + '</span>' : '';
+    const hsHtml = headshotHtml(q.person);
+    const uploadLink = adminMode ? '<span class="upload-headshot" onclick="uploadHeadshot(\'' + personKey(q.person) + '\',\'' + esc(q.person) + '\')">photo</span>' : '';
 
     let c = '<div class="quote-card' + (isEditing ? ' editing' : '') + '" id="card-' + i + '">';
     c += '<div class="card-actions">';
@@ -458,7 +503,7 @@ function renderQuotes() {
     }
     c += '<button class="card-btn" onclick="copyQuote(' + i + ')">Copy</button>';
     c += '</div>';
-    c += '<div class="quote-meta"><span class="person-name">' + esc(q.person) + '</span>';
+    c += '<div class="quote-meta"><span class="person-name">' + hsHtml + esc(q.person) + uploadLink + '</span>';
     c += '<span class="badge badge-membership">' + esc(q.membership) + '</span>' + chapterBadge + topicBadges + '</div>';
 
     if (isEditing) {
@@ -482,6 +527,42 @@ function renderQuotes() {
   if (filtered.length > 200) {
     grid.innerHTML += '<div class="empty-state"><p>Showing first 200 of ' + filtered.length + ' results. Use filters to narrow down.</p></div>';
   }
+}
+
+// --- Headshot upload ---
+function uploadHeadshot(key, name) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/*';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 500000) { showToast('Image too large. Please use under 500KB.'); return; }
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      // Resize to small thumbnail
+      const img = new Image();
+      img.onload = async () => {
+        const canvas = document.createElement('canvas');
+        const size = 150;
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        const min = Math.min(img.width, img.height);
+        const sx = (img.width - min) / 2;
+        const sy = (img.height - min) / 2;
+        ctx.drawImage(img, sx, sy, min, min, 0, 0, size, size);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        headshots[key] = dataUrl;
+        await fetch(DB_URL + '/headshots/' + key + '.json', { method: 'PUT', body: JSON.stringify(dataUrl), headers: { 'Content-Type': 'application/json' } });
+        renderQuotes();
+        showToast('Headshot updated for ' + name);
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+  };
+  input.click();
 }
 
 // --- Edit ---
